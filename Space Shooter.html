@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Galactic Defender — Single File Space Shooter</title>
+  <style>
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:#04060a;color:#eef2ff;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{width:760px;max-width:98vw;background:linear-gradient(180deg,#071226,#041020);border-radius:12px;padding:12px;box-shadow:0 10px 40px rgba(2,6,12,.6)}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    header h1{font-size:18px;margin:0}
+    .hud{display:flex;gap:8px;align-items:center}
+    .chip{background:rgba(255,255,255,0.03);padding:6px 10px;border-radius:8px;font-weight:700;font-size:13px}
+    .stage{position:relative;border-radius:8px;overflow:hidden;background:#001222;height:540px}
+    canvas{display:block;width:100%;height:100%}
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+    .menu{pointer-events:auto;background:rgba(0,0,0,0.45);padding:18px;border-radius:10px;text-align:center}
+    button{appearance:none;border:0;background:#18a0ff;color:white;padding:10px 14px;border-radius:8px;font-weight:800;cursor:pointer}
+    button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+    footer{display:flex;justify-content:space-between;margin-top:10px;font-size:12px;color:#9fb2c9}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <h1>Galactic Defender</h1>
+        <div class="hud">
+          <div class="chip">Score: <span id="score">0</span></div>
+          <div class="chip">Lives: <span id="lives">3</span></div>
+        </div>
+      </header>
+
+      <div class="stage" id="stage">
+        <canvas id="game"></canvas>
+        <div class="overlay">
+          <div class="menu" id="menu">
+            <h2 style="margin:0 0 8px">Galactic Defender</h2>
+            <p style="margin:0 0 12px">Use ← → or A / D to move. Press Space to shoot. Destroy enemy ships and survive as long as possible.</p>
+            <div style="display:flex;gap:8px;justify-content:center">
+              <button id="start">Start</button>
+              <button class="secondary" id="how">How</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer>
+        <div>Single-file HTML5 canvas game</div>
+        <div>Press P to pause</div>
+      </footer>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // DOM
+  const canvas = document.getElementById('game');
+  const stage = document.getElementById('stage');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const menu = document.getElementById('menu');
+  const startBtn = document.getElementById('start');
+  const howBtn = document.getElementById('how');
+
+  const ctx = canvas.getContext('2d');
+  const DPR = window.devicePixelRatio || 1;
+  let W, H;
+  function resize(){
+    W = stage.clientWidth; H = stage.clientHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Game state
+  let running = false, paused = false;
+  let score = 0, lives = 3;
+  let ship, bullets = [], enemies = [], particles = [];
+  let last = 0, spawnTimer = 0;
+
+  // Utils
+  const rand = (a,b) => Math.random()*(b-a)+a;
+  const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+
+  // Player ship
+  class Ship{
+    constructor(){
+      this.w = 46; this.h = 26;
+      this.x = W/2 - this.w/2; this.y = H - this.h - 18;
+      this.speed = 6; this.cooldown = 0;
+    }
+    draw(){
+      ctx.save();
+      // body
+      ctx.fillStyle = '#64e1ff';
+      roundRect(ctx,this.x,this.y,this.w,this.h,6); ctx.fill();
+      // cockpit
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      roundRect(ctx,this.x+8,this.y+4,this.w-16,this.h-10,4); ctx.fill();
+      ctx.restore();
+    }
+    update(dt){
+      this.cooldown = Math.max(0,this.cooldown - dt);
+    }
+    shoot(){
+      if(this.cooldown>0) return;
+      bullets.push(new Bullet(this.x + this.w/2, this.y));
+      this.cooldown = 12; // frames
+    }
+  }
+
+  class Bullet{
+    constructor(x,y){ this.x = x; this.y = y; this.r = 4; this.speed = 12; }
+    update(dt){ this.y -= this.speed * dt; }
+    draw(){ ctx.beginPath(); ctx.arc(this.x,this.y,this.r,0,Math.PI*2); ctx.fillStyle='#ffd97a'; ctx.fill(); }
+  }
+
+  class Enemy{
+    constructor(){
+      this.w = rand(28,48); this.h = this.w*0.6;
+      this.x = rand(12, W - this.w - 12);
+      this.y = -this.h - rand(10,200);
+      this.speed = rand(1.6,3.2);
+      this.hp = Math.ceil(this.w / 20);
+      this.color = `hsl(${rand(0,360)},60%,60%)`;
+    }
+    update(dt){ this.y += this.speed * dt; }
+    draw(){ ctx.save(); roundRect(ctx,this.x,this.y,this.w,this.h,6); ctx.fillStyle=this.color; ctx.fill(); ctx.restore(); }
+  }
+
+  class Particle{
+    constructor(x,y,dx,dy,life){ this.x=x;this.y=y;this.dx=dx;this.dy=dy;this.life=life; }
+    update(dt){ this.x+=this.dx*dt; this.y+=this.dy*dt; this.life-=dt; }
+    draw(){ ctx.globalAlpha = Math.max(0, this.life/30); ctx.fillStyle='#fff'; ctx.fillRect(this.x,this.y,2,2); ctx.globalAlpha=1; }
+  }
+
+  function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+  // Controls
+  const keys = {left:false,right:false,shoot:false};
+  window.addEventListener('keydown', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+    if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+    if(e.code === 'Space') keys.shoot = true;
+    if(e.key === 'p' || e.key === 'P') paused = !paused;
+  });
+  window.addEventListener('keyup', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+    if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+    if(e.code === 'Space') keys.shoot = false;
+  });
+
+  // Game methods
+  function reset(){ score=0; lives=3; bullets=[]; enemies=[]; particles=[]; ship=new Ship(); updateHUD(); }
+  function updateHUD(){ scoreEl.textContent = Math.floor(score); livesEl.textContent = lives; }
+
+  function spawnEnemy(){ enemies.push(new Enemy()); }
+
+  function update(ts){
+    if(!running) return;
+    if(paused){ last = ts; requestAnimationFrame(update); return; }
+    if(!last) last = ts;
+    const dt = (ts - last) / (1000/60); // dt in frames
+    last = ts;
+
+    // player movement
+    if(keys.left) ship.x -= ship.speed * dt;
+    if(keys.right) ship.x += ship.speed * dt;
+    ship.x = clamp(ship.x, 8, W - ship.w - 8);
+    ship.update(dt);
+
+    // shooting
+    if(keys.shoot) ship.shoot();
+
+    // bullets
+    for(let i=bullets.length-1;i>=0;i--){ let b = bullets[i]; b.update(dt); if(b.y < -10) bullets.splice(i,1); }
+
+    // enemies
+    spawnTimer += dt;
+    if(spawnTimer > clamp(28 - score/30, 12, 90)) { spawnTimer = 0; spawnEnemy(); }
+
+    for(let i=enemies.length-1;i>=0;i--){ let e = enemies[i]; e.update(dt);
+      // collision with bullets
+      for(let j=bullets.length-1;j>=0;j--){ let b = bullets[j]; if(dist(b.x,b.y, e.x+e.w/2, e.y+e.h/2) < e.w/2 + b.r){ bullets.splice(j,1); e.hp--; score += 4; for(let p=0;p<6;p++) particles.push(new Particle(b.x,b.y,rand(-2,2),rand(-2,2),30)); if(e.hp<=0){ enemies.splice(i,1); score += 16; break; } }
+      }
+      // enemy hits player
+      if(rectIntersect(e.x,e.y,e.w,e.h, ship.x, ship.y, ship.w, ship.h)){
+        // damage
+        enemies.splice(i,1);
+        lives -= 1; for(let p=0;p<24;p++) particles.push(new Particle(ship.x+ship.w/2, ship.y+ship.h/2, rand(-3,3), rand(-3,3), 40));
+        if(lives <= 0){ gameOver(); return; }
+      }
+      // off-screen
+      if(e.y > H + 60) enemies.splice(i,1);
+    }
+
+    // particles
+    for(let i=particles.length-1;i>=0;i--){ let p=particles[i]; p.update(dt); if(p.life<=0) particles.splice(i,1); }
+
+    // scoring over time
+    score += 0.02 * dt;
+
+    updateHUD();
+    render();
+    requestAnimationFrame(update);
+  }
+
+  function render(){
+    // clear
+    ctx.clearRect(0,0,W,H);
+    // starfield background
+    ctx.fillStyle = '#00131b'; ctx.fillRect(0,0,W,H);
+    // draw stars (cheap static ones)
+    for(let i=0;i<50;i++){ ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect((i*73)%W, (i*47)%H, 2,2); }
+
+    // bullets
+    bullets.forEach(b=>b.draw());
+    // enemies
+    enemies.forEach(e=>e.draw());
+    // player
+    ship.draw();
+    // particles
+    particles.forEach(p=>p.draw());
+  }
+
+  function gameOver(){ running=false; menu.style.display='block'; menu.innerHTML = `<h2 style="margin:0 0 8px">Game Over</h2><p style="margin:0 0 12px">Score: ${Math.floor(score)}</p><div style="display:flex;gap:8px;justify-content:center"><button id="restart">Restart</button><button class="secondary" id="menuBtn">Main Menu</button></div>`;
+    document.getElementById('restart').addEventListener('click', ()=>{ menu.style.display='none'; reset(); running=true; last=0; requestAnimationFrame(update); });
+    document.getElementById('menuBtn').addEventListener('click', ()=>{ location.reload(); });
+  }
+
+  function dist(x1,y1,x2,y2){ return Math.hypot(x1-x2,y1-y2); }
+  function rectIntersect(x1,y1,w1,h1,x2,y2,w2,h2){ return !(x2 > x1 + w1 || x2 + w2 < x1 || y2 > y1 + h1 || y2 + h2 < y1); }
+
+  // UI
+  startBtn.addEventListener('click', ()=>{ menu.style.display='none'; reset(); running=true; last=0; requestAnimationFrame(update); });
+  howBtn.addEventListener('click', ()=>{ menu.innerHTML = `<h3 style="margin:0 0 8px">How to play</h3><p style="margin:0 0 12px">Move with ← → or A/D. Hold Space to shoot. Destroy enemies. Don't collide. Press P to pause.</p><div style="display:flex;gap:8px;justify-content:center"><button id="back">Back</button></div>`; document.getElementById('back').addEventListener('click', ()=>{ menu.innerHTML = originalMenuHTML; }); });
+
+  const originalMenuHTML = menu.innerHTML;
+
+  // start paused until user starts
+  menu.style.display = 'flex';
+
+  // ensure canvas resizes at start
+  setTimeout(resize, 50);
+})();
+</script>
+</body>
+</html>
